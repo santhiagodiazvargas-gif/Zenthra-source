@@ -1,0 +1,594 @@
+if _G.EmotesGUIRunning then
+    getgenv().Notify({
+        Title = 'Zenthra | Emote',
+        Content = 'It works It actually works',
+        Duration = 5
+    })
+    return
+end
+_G.EmotesGUIRunning = true
+local offsaleAnimationJson = true
+local UI
+
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
+local ContentProvider = game:GetService("ContentProvider")
+local StarterGui = game:GetService("StarterGui")
+local request = http_request or (syn and syn.request) or request
+
+-- runtime de teardown (Zenthra): rastreia conexoes/guis pra poder desligar o module
+local _ZE = getgenv().__ZE
+if type(_ZE) ~= "table" then _ZE = {} ; getgenv().__ZE = _ZE end
+_ZE.conns = {}
+_ZE.alive = true
+local function _ztrack(c) if c then table.insert(_ZE.conns, c) end return c end
+
+local State = {
+    currentMode = "emote",
+    emotesWalkEnabled = false,
+    favoriteEnabled = false,
+    hudEditorActive = false,
+    speedEmoteEnabled = false,
+    isLoading = false,
+    favoriteSetVersion = 0,
+    favoriteSetBuiltVersion = -1,
+    emoteCacheVersion = 0,
+    animationCacheVersion = 0,
+    isGUICreated = false,
+    isMonitoringClicks = false,
+    lastRadialActionTime = 0,
+    lastWheelVisibleTime = 0,
+    lastActionTick = 0,
+    lastRandomEmoteId = nil,
+    lastRandomAnimationId = nil,
+    lastRandomVisualSpam = 0,
+    randomSpamConn = nil,
+    animImageSpamConn = nil,
+    animImageSpamMap = nil,
+    animImageSpamTicks = nil,
+    animImageSpamToken = 0,
+    animImageRetry = 0,
+    randomSlotBlockerConn = nil,
+    totalEmotesLoaded = 0,
+    currentPage = 1,
+    totalPages = 1,
+    itemsPerPage = 8,
+    emoteSearchTerm = "",
+    animationSearchTerm = "",
+    currentEmoteTrack = nil,
+    currentCharacter = nil,
+    emoteClickConnections = {},
+    guiConnections = {},
+    animationsData = {},
+    originalAnimationsData = {},
+    filteredAnimations = {},
+    favoriteAnimations = {},
+    favoriteAnimationsFileName = "Zenthra/Emotes/FavoriteAnimations.json",
+    emotesData = {},
+    originalEmotesData = {},
+    filteredEmotes = {},
+    scannedEmotes = {},
+    favoriteEmotes = {},
+    favoriteFileName = "Zenthra/Emotes/FavoriteEmotes.json",
+    speedEmoteConfigFile = "Zenthra/Emotes/SpeedEmoteConfig.json",
+    favoriteEmoteSet = {},
+    favoriteAnimationSet = {},
+    emotePageCache = { version = nil, normal = {}, favorites = {} },
+    animationPageCache = { version = nil, normal = {}, favorites = {} },
+    suppressSearch = false,
+    emoteMonitorToken = 0,
+    animationMonitorToken = 0,
+    imageUpdateToken = 0,
+    defaultButtonImage = "rbxassetid://10734964600",
+    enabledButtonImage = "rbxassetid://10734964600",
+    favoriteIconId = "rbxassetid://10734966248",
+    notFavoriteIconId = "rbxassetid://10734966248",
+    EmoteTheme = nil,
+    isApplyingTheme = false,
+    targetImages = {},
+    AnimationCachePath = "Zenthra/Emotes/AnimationCache.json",
+    AnimationCache = {},
+    AnimationListCachePath = "Zenthra/Emotes/AnimationListCache.json",
+    EmoteListCachePath = "Zenthra/Emotes/EmoteListCache.json",
+    CustomAnimationPath = "Zenthra/Emotes/CustomAnimations.json",
+    CustomAnimations = {},
+    currentCustomAnimationName = "Default",
+    customAnimationEditorActive = false,
+    customAnimationEditingKey = nil,
+    customAnimationEditingName = nil,
+    EmotePagePath = "Zenthra/Emotes/EmotePages.json",
+    EmotePages = {},
+    currentEmotePageName = "Default",
+    AnimationPagePath = "Zenthra/Emotes/AnimationPages.json",
+    AnimationPages = {},
+    currentAnimationPageName = "Default",
+    EmoteDataCachePath = "Zenthra/Emotes/EmoteDataCache.json"
+}
+
+Config = {
+    NotifyEnabled = true,
+    SearchVisible = true,
+    FavVisible = true,
+    ModeVisible = true,
+    FreezeVisible = true,
+    SpeedVisible = true,
+    NavVisible = true,
+    EmoteSpeed = 1,
+    EmoteSpeedEnabled = false,
+    SelectedTheme = "Default",
+    EmotePage = 1,
+    AnimationPage = 1,
+    RandomEnabled = true,
+    RandomMode = "All",
+    AuthenticFirstPage = false,
+    HUDPositions = {},
+    HUDSizes = {},
+    HUDProperties = {},
+    CustomFrames = {},
+    AutoReloadEnabled = false,
+    LastPlayedAnimationData = nil,
+    DiscordVisible = true
+}
+
+HUD = {
+    Connections = {},
+    IsUnlocked = false,
+    DefaultPositions = {},
+    DefaultSizes = {},
+    DefaultTexts = {},
+    DefaultPlaceholders = {},
+    Layouts = {},
+    LayoutsRemoved = {},
+    SelectionGui = nil,
+    SelectedElement = nil,
+    ResizeHandles = {},
+    ResizeConnections = {},
+    FriendlyNames = {
+        ["Under.1left"] = "PrevPage",
+        ["Under.9right"] = "NextPage",
+        ["Under.4pages"] = "TotalPages",
+        ["Under.3TextLabel"] = "Divider",
+        ["Under.2Route-number"] = "CurrentPage",
+        ["Top.Search"] = "Search",
+        ["EmoteWalkButton"] = "Freeze",
+        ["Favorite"] = "Favorite",
+        ["SpeedEmote"] = "SpeedEmote",
+        ["SpeedBox"] = "SpeedBox",
+        ["Changepage"] = "ChangePage",
+        ["Reload"] = "AutoReload",
+        ["Top"] = "Top",
+        ["Under"] = "Under"
+    }
+}
+
+local DEFAULT_IDLE_ICON_ID = "rbxassetid://10734964600"
+local DEFAULT_IDLE_ICON_COLOR = Color3.fromRGB(248, 248, 250)
+
+function DeepCopy(original)
+    if type(original) ~= "table" then return original end
+    local copy = {}
+    for k, v in pairs(original) do
+        if type(v) == "table" then
+            v = DeepCopy(v)
+        end
+        copy[k] = v
+    end
+    return copy
+end
+
+function ColorToTable(color)
+    return {color.R, color.G, color.B}
+end
+
+function TableToColor(tbl)
+    if not tbl or type(tbl) ~= "table" or #tbl < 3 then return Color3.new(1,1,1) end
+    return Color3.new(tbl[1], tbl[2], tbl[3])
+end
+
+function loadAnimationCache()
+    if isfile and isfile(State.AnimationCachePath) then
+        local success, decoded = pcall(function()
+            return HttpService:JSONDecode(readfile(State.AnimationCachePath))
+        end)
+        if success and type(decoded) == "table" then
+            State.AnimationCache = decoded
+        end
+    end
+end
+
+function saveAnimationCache()
+    if writefile then
+        pcall(function()
+            if not isfolder("Zenthra/Emotes") then makefolder("Zenthra/Emotes") end
+            writefile(State.AnimationCachePath, HttpService:JSONEncode(State.AnimationCache))
+        end)
+    end
+end
+
+function resolveAnimationMappings(bundledItems)
+    local mappings = {}
+    for _, assetIds in pairs(bundledItems) do
+        for _, assetId in pairs(assetIds) do
+            local success, objects = pcall(function()
+                return game:GetObjects("rbxassetid://" .. assetId)
+            end)
+            if success and objects then
+                local function searchTree(parent, parentPath)
+                    for _, child in pairs(parent:GetChildren()) do
+                        if child:IsA("Animation") then
+                            local animationPath = parentPath .. "." .. child.Name
+                            local pathParts = animationPath:split(".")
+                            local weightVals = {}
+                            for _, wChild in ipairs(child:GetChildren()) do
+                                if wChild:IsA("NumberValue") and wChild.Name == "Weight" then
+                                    table.insert(weightVals, wChild.Value)
+                                end
+                            end
+                            table.insert(mappings, {
+                                category = pathParts[#pathParts - 1],
+                                name = pathParts[#pathParts],
+                                animationId = child.AnimationId,
+                                weights = weightVals
+                            })
+                        elseif #child:GetChildren() > 0 then
+                            searchTree(child, parentPath .. "." .. child.Name)
+                        end
+                    end
+                end
+                for _, obj in pairs(objects) do
+                    searchTree(obj, obj.Name)
+                    obj.Parent = workspace
+                    task.delay(1, function()
+                        if obj then obj:Destroy() end
+                    end)
+                end
+            end
+        end
+    end
+    return mappings
+end
+
+function buildCustomSetMappings(setName)
+    if type(setName) == "string" then
+        setName = setName:gsub("%s*%-.*$", "")
+    end
+    local set = State.CustomAnimations and State.CustomAnimations.Sets and State.CustomAnimations.Sets[setName]
+    if not set then return {} end
+    local mappings = {}
+    for cat, anims in pairs(set) do
+        if cat ~= "__meta" then
+            for name, id in pairs(anims) do
+                if tostring(id) ~= "0" then
+                    table.insert(mappings, {category = cat, name = name, animationId = "rbxassetid://" .. id})
+                end
+            end
+        end
+    end
+    return mappings
+end
+
+
+
+loadAnimationCache()
+
+
+local AnimationSystem = {
+    Cache = {},
+    currentThemeName = "Default"
+}   
+
+AnimationSystem.LooksLikeGif = function(url)
+    if not url then return false end
+    url = string.lower(tostring(url))
+    return url:find(".gif") or url:find("gif") or url:find("format=gif") or url:find("image/gif")
+end
+
+AnimationSystem.NormalizeUrl = function(url)
+    if not url or url == "" then return url end
+    local targetUrl = tostring(url)
+    
+    targetUrl = targetUrl:gsub("%?raw=true", "")
+    
+    if targetUrl:find("github%.com/") and not targetUrl:find("raw.githubusercontent%.com") then
+        targetUrl = targetUrl:gsub("github%.com/", "raw.githubusercontent.com/")
+        targetUrl = targetUrl:gsub("/blob/", "/")
+        targetUrl = targetUrl:gsub("/raw/", "/")
+    end
+    
+    if targetUrl:find(" ") and not targetUrl:find("%%20") then
+        targetUrl = targetUrl:gsub(" ", "%%20")
+    end
+    
+    if not targetUrl:find("://") then
+        local id = targetUrl:match("id=(%d+)") or targetUrl:match("^(%d+)$")
+        if id then return "rbxassetid://" .. id end
+    end
+    return targetUrl
+end
+
+AnimationSystem.ParseGifInfo = function(bytes)
+    if not bytes or #bytes < 13 then return nil end
+    if bytes:sub(1, 3) ~= "GIF" then return nil end
+    local function u16le(pos)
+        local b1 = bytes:byte(pos) or 0
+        local b2 = bytes:byte(pos + 1) or 0
+        return b1 + b2 * 256
+    end
+    local width = u16le(7)
+    local height = u16le(9)
+    local packed = bytes:byte(11) or 0
+    local gctFlag = bit32.band(packed, 0x80) ~= 0
+    local gctSize = bit32.band(packed, 0x07)
+    local offset = 13
+    if gctFlag then
+        offset = offset + (3 * (2 ^ (gctSize + 1)))
+    end
+
+    local frames = 0
+    local delays = {}
+    local pendingDelay = nil
+
+    local function skipSubBlocks(pos)
+        while pos <= #bytes do
+            local size = bytes:byte(pos) or 0
+            pos = pos + 1
+            if size == 0 then break end
+            pos = pos + size
+        end
+        return pos
+    end
+
+    while offset <= #bytes do
+        local b = bytes:byte(offset)
+        if not b then break end
+        if b == 0x3B then
+            break
+        elseif b == 0x21 then
+            local label = bytes:byte(offset + 1) or 0
+            if label == 0xF9 then
+                local delay = u16le(offset + 4)
+                pendingDelay = delay
+                offset = offset + 8
+            else
+                offset = skipSubBlocks(offset + 2)
+            end
+        elseif b == 0x2C then
+            frames = frames + 1
+            if pendingDelay then
+                table.insert(delays, pendingDelay)
+                pendingDelay = nil
+            end
+            local packedImg = bytes:byte(offset + 9) or 0
+            local lctFlag = bit32.band(packedImg, 0x80) ~= 0
+            local lctSize = bit32.band(packedImg, 0x07)
+            offset = offset + 10
+            if lctFlag then
+                offset = offset + (3 * (2 ^ (lctSize + 1)))
+            end
+            offset = offset + 1
+            offset = skipSubBlocks(offset)
+        else
+            offset = offset + 1
+        end
+    end
+
+    local totalDelay = 0
+    for _, d in ipairs(delays) do totalDelay = totalDelay + d end
+    local avgDelay = (#delays > 0) and (totalDelay / #delays) or 10
+
+    return {
+        width = width,
+        height = height,
+        frames = frames > 0 and frames or #delays,
+        totalDelayCs = totalDelay,
+        avgDelayCs = avgDelay
+    }
+end
+
+AnimationSystem.ParsePngInfo = function(bytes)
+    if not bytes or #bytes < 24 then return nil end
+    if bytes:sub(1, 8) ~= "\137PNG\r\n\26\n" then return nil end
+    local function u32be(pos)
+        local b1 = bytes:byte(pos) or 0
+        local b2 = bytes:byte(pos + 1) or 0
+        local b3 = bytes:byte(pos + 2) or 0
+        local b4 = bytes:byte(pos + 3) or 0
+        return ((b1 * 256 + b2) * 256 + b3) * 256 + b4
+    end
+    local width = u32be(17)
+    local height = u32be(21)
+    if width <= 0 or height <= 0 then return nil end
+    return { width = width, height = height }
+end
+
+AnimationSystem.StopGif = function()
+    if State.currentWheelAnimToken then
+        State.currentWheelAnimToken = State.currentWheelAnimToken + 1
+    end
+end
+
+AnimationSystem.SetImageMode = function(img, custom)
+    if not img then return end
+    if custom then
+        img.ScaleType = Enum.ScaleType.Stretch
+        img.SliceCenter = Rect.new(0, 0, 0, 0)
+        img.SliceScale = 1
+    else
+        img.ScaleType = Enum.ScaleType.Fit
+    end
+end
+
+AnimationSystem.StartGif = function(img, data)
+    AnimationSystem.StopGif()
+    if not img or not data or not data.sprite then return end
+    
+    State.currentWheelAnimToken = (State.currentWheelAnimToken or 0) + 1
+    local token = State.currentWheelAnimToken
+    
+    local frames = data.frames or 1
+    local frameW = data.frameW or 0
+    local frameH = data.frameH or 0
+    local cols = data.cols or 1
+    local rows = data.rows or 1
+    local delay = data.delay or 0.1
+    local sheetW = data.sheetW or (cols * frameW)
+    local sheetH = data.sheetH or (rows * frameH)
+    
+    img.Image = data.sprite
+    img.ImageRectSize = Vector2.new(frameW, frameH)
+    img.ImageRectOffset = Vector2.new(0, 0)
+    pcall(function() ContentProvider:PreloadAsync({img}) end)
+    
+    local current = 0
+    local acc = 0
+    local connection
+    connection = RunService.Heartbeat:Connect(function(dt)
+        if token ~= State.currentWheelAnimToken then
+            connection:Disconnect()
+            return
+        end
+        acc = acc + dt
+        if acc < delay then return end
+        acc = 0
+        current = (current + 1) % frames
+        local col = current % cols
+        local row = math.floor(current / cols)
+        local offsetX = math.min(col * frameW, math.max(0, sheetW - frameW))
+        local offsetY = math.min(row * frameH, math.max(0, sheetH - frameH))
+        img.ImageRectOffset = Vector2.new(offsetX, offsetY)
+    end)
+end
+
+AnimationSystem.AreMetaEqual = function(a, b)
+    if not a or not b then return a == b end
+    return a.GifUrl == b.GifUrl and a.SheetUrl == b.SheetUrl and a.Enabled == b.Enabled
+end
+
+AnimationSystem.MakeKey = function(gif, sheet)
+    return tostring(gif) .. "|" .. tostring(sheet)
+end
+
+function ApplyFreezeButtonVisual()
+    if not UI.EmoteWalkButton then return end
+    UI.EmoteWalkButton.Image = State.emotesWalkEnabled and State.enabledButtonImage or State.defaultButtonImage
+end
+
+-- estado ativo (accent) dos botoes de toggle. chamado direto no clique (atualizacao
+-- instantanea) e no open da wheel. tween suave via TweenService.
+function refreshToggleButtons()
+    local TS = game:GetService("TweenService")
+    local ti = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    local function apply(btn, active)
+        if not btn then return end
+        local stroke = btn:FindFirstChild("ZenthraStroke")
+        local strokeGrad = stroke and stroke:FindFirstChild("ZenthraStrokeGrad")
+        if active then
+            pcall(function() TS:Create(btn, ti, {BackgroundColor3 = Color3.fromRGB(248,248,250), BackgroundTransparency = 0.04}):Play() end)
+            if stroke then
+                stroke.Color = Color3.fromRGB(248,248,250)
+                pcall(function() TS:Create(stroke, ti, {Transparency = 0.1}):Play() end)
+                if strokeGrad then strokeGrad.Color = ColorSequence.new(Color3.fromRGB(255,255,255)) end
+            end
+            if btn:IsA("ImageButton") or btn:IsA("ImageLabel") then
+                pcall(function() TS:Create(btn, ti, {ImageColor3 = Color3.fromRGB(7,7,9)}):Play() end)
+            end
+        else
+            pcall(function() TS:Create(btn, ti, {BackgroundColor3 = Color3.fromRGB(0,0,0), BackgroundTransparency = 0.4}):Play() end)
+            if stroke then
+                stroke.Color = Color3.fromRGB(120,120,128)
+                pcall(function() TS:Create(stroke, ti, {Transparency = 0.35}):Play() end)
+                if strokeGrad then
+                    strokeGrad.Color = ColorSequence.new{
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(235,235,238)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(90,90,96)),
+                    }
+                end
+            end
+            if btn:IsA("ImageButton") or btn:IsA("ImageLabel") then
+                pcall(function() TS:Create(btn, ti, {ImageColor3 = Color3.fromRGB(210,210,214)}):Play() end)
+            end
+        end
+    end
+    apply(UI.EmoteWalkButton, State.emotesWalkEnabled)
+    apply(UI.Favorite, State.favoriteEnabled)
+    apply(UI.SpeedEmote, State.speedEmoteEnabled)
+    apply(UI.Reload, getgenv().autoReloadEnabled == true)
+end
+
+AnimationSystem.GetIconColor = function(key)
+    if themes and themes[AnimationSystem.currentThemeName] then
+        local theme = themes[AnimationSystem.currentThemeName]
+        if theme.IconColors and theme.IconColors[key] then
+            return TableToColor(theme.IconColors[key])
+        end
+        return TableToColor(theme.ImageColor or {255, 255, 255})
+    elseif State.EmoteTheme then
+        local theme = State.EmoteTheme
+        if theme.IconColors and theme.IconColors[key] then
+            return TableToColor(theme.IconColors[key])
+        end
+        return theme.ImageColor or Color3.new(1, 1, 1)
+    end
+    return Color3.fromRGB(255, 255, 255)
+end
+
+AnimationSystem.ResetRandomSlot = function(frontFrame)
+    if not frontFrame then return end
+    local slot = frontFrame:FindFirstChild("1")
+    if slot and slot:IsA("ImageLabel") then
+        slot.ImageColor3 = Color3.fromRGB(255, 255, 255)
+        slot.Image = ""
+        local idValue = slot:FindFirstChild("AnimationID")
+        if idValue then idValue:Destroy() end
+    end
+end
+
+
+UI = {
+    CustomFrames = {},
+    Under = nil, 
+    _1left = nil, 
+    _9right = nil, 
+    _4pages = nil, 
+    _3TextLabel = nil, 
+    _2Routenumber = nil, 
+    Top = nil, 
+    EmoteWalkButton = nil,
+    Search = nil, 
+    Favorite = nil, 
+    SpeedEmote = nil, 
+    SpeedBox = nil, 
+    Changepage = nil,
+    Reload = nil,
+    Background = nil
+}
+
+local HUD = { 
+    Connections = {},
+    Strokes = {},
+    ResizeHandles = {},
+    ResizeConnections = {},
+    UndoStack = {},
+    SelectedElement = nil,
+    Overlay = nil,
+    IsUnlocked = false,
+    ForceVisibleConn = nil,
+    Layouts = {},
+    LayoutsRemoved = {},
+    FriendlyNames = {
+        ["Under.1left"] = "Left Arrow",
+        ["Under.9right"] = "Right Arrow",
+        ["Under.4pages"] = "Total Pages",
+        ["Under.3TextLabel"] = "Separator Label",
+        ["Under.2Route-number"] = "Page Number Box",
+        ["Top.Search"] = "Search/ID Box",
+    },
+    DefaultPositions = {
+        Top = UDim2.new(0.127499998, 0, -0.109999999, 0),
+        Under = UDim2.new(0.129999995, 0, 1, 0),
+        EmoteWalkButton = UDim2.
